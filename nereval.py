@@ -125,8 +125,9 @@ def evaluate(y_true, y_pred):
         # multiply by two to account for both type and text
         possible += len(x) * 2
         actual += len(y) * 2
-
-    return f1(precision(correct, actual), recall(correct, possible))
+    calculatedPrecision = precision(correct, actual)
+    calculatedRecall = recall(correct, possible)
+    return f1(calculatedPrecision, calculatedRecall), calculatedPrecision, calculatedRecall
 
 def sign_test(truth, model_a, model_b):
     better = 0
