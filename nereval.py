@@ -45,7 +45,7 @@ def correct_type(x, y):
     """
     return x.type == y.type and has_overlap(x, y)
 
-def count_correct(true, pred, gold_coverage = 0.8, debug = False):
+def count_correct_over_x(true, pred, gold_coverage = 0.8, debug = False):
     """
     Computes the count of correctly predicted entities on two axes: type and text.
 
@@ -64,7 +64,6 @@ def count_correct(true, pred, gold_coverage = 0.8, debug = False):
         The number of entities where the type is correctly predicted and the text overlaps.
     """
     count_text, count_lower_coverage = 0, 0
-
     for x in true:
         for y in pred:
             text_match = correct_text(x, y)
@@ -73,26 +72,69 @@ def count_correct(true, pred, gold_coverage = 0.8, debug = False):
             if text_match:
                 if debug == True:
                     print("COMPLETE MATCH:\n\t", x.text, " - ", y.text, "\n\t", x.start,y.start)
+                
                 count_text += 1
 
             if type_match:
                 count_lower_coverage += 1
                 if not text_match and debug == True:
-                    print("PARTIAL MATCH:\n\t", x.text, " - ", y.text, "\n\t", f"{x.start} - {x.start + len(x.text)}", f"{y.start} - {y.start + len(y.text)}")
-
+                    print("PARTIAL MATCH:\n\t", x.text, " - ", y.text, "\n\t", f"true {x.start} - {x.start + len(x.text)}", f"pred {y.start} - {y.start + len(y.text)}", f"percentage coverage on true: {percentage_overlap_on_x(x, y)}")
 
 
 
             if type_match or text_match:
                 # Stop as soon as an entity has been recognized by the system
                 break
-    
     return count_text, count_lower_coverage
+
+# returns how many predicted entities are 
+def count_correct_over_y(true, pred, gold_coverage = 0.8, debug = False):
+    """
+    Computes the count of correctly predicted entities on two axes: type and text.
+
+    Parameters
+    ----------
+    true: list of Entity
+        The list of ground truth entities.
+    pred: list of Entity
+        The list of predicted entities.
+
+    Returns
+    -------
+    count_text: int
+        The number of entities predicted where the text matches exactly.
+    count_lower_coverage: int
+        The number of entities where the type is correctly predicted and the text overlaps.
+    """
+    count_text, count_lower_coverage = 0, 0
+    for y in pred:
+       for x in true:
+            text_match = correct_text(x, y)
+            type_match = percentage_overlap_on_x(x, y) >= gold_coverage
+
+            if text_match:
+                if debug == True:
+                    pass#print("COMPLETE MATCH:\n\t", x.text, " - ", y.text, "\n\t", x.start,y.start)
+                
+                count_text += 1
+
+            if type_match:
+                count_lower_coverage += 1
+                if not text_match and debug == True:
+                    print("PARTIAL MATCH:\n\t", x.text, " - ", y.text, "\n\t", f"true {x.start} - {x.start + len(x.text)}", f"pred {y.start} - {y.start + len(y.text)}", f"percentage coverage on true: {percentage_overlap_on_x(x, y)}")
+
+
+
+            if type_match or text_match:
+                # Stop as soon as an entity has been recognized by the system
+                break
+    return count_text, count_lower_coverage
+
+
 
 def precision(correct, actual):
     if actual == 0:
         return 0
-
     return correct / actual
 
 def recall(correct, possible):
@@ -108,17 +150,14 @@ def f1(p, r):
     return 2 * (p * r) / (p + r)
 
 def get_counts_correct(y_true, y_pred, gold_coverage = 0.8, debug = False):
-    
-    x, y = y_true, y_pred
+    correctCompleteRecall, correctPartialRecall = count_correct_over_x(y_true, y_pred, gold_coverage=gold_coverage, debug = debug)
+    correctCompletePrecision, correctPartialPrecision = count_correct_over_y(y_true, y_pred, gold_coverage=gold_coverage, debug = debug)
+    possible = len(y_true) 
+    actual = len(y_pred) 
 
 
-    count_text, count_lower_coverage = count_correct(x, y, gold_coverage=gold_coverage, debug = debug)
-    correctComplete = count_text
-    correctPartial  = count_lower_coverage
-    possible = len(x) 
-    actual = len(y) 
 
-    return correctComplete, correctPartial, possible, actual
+    return correctCompleteRecall, correctPartialRecall, correctCompletePrecision, correctPartialPrecision, possible, actual
 
 
 def evaluate_document(y_true, y_pred, gold_coverage = 0.8, debug = False):
@@ -154,15 +193,15 @@ def evaluate_document(y_true, y_pred, gold_coverage = 0.8, debug = False):
         print("COVERAGE CANT BE 0")
         return None
 
-    correctComplete, correctPartial, possible, actual = get_counts_correct(y_true, y_pred, gold_coverage=gold_coverage, debug = debug)
+    correctCompleteRecall, correctPartialRecall, correctCompletePrecision, correctPartialPrecision, possible, actual = get_counts_correct(y_true, y_pred, gold_coverage=gold_coverage, debug = debug)
 
 
-    calculatedPrecisionComplete = precision(correctComplete, actual)
-    calculatedRecallComplete = recall(correctComplete, possible)
+    calculatedPrecisionComplete = precision(correctCompletePrecision, actual)
+    calculatedRecallComplete = recall(correctCompleteRecall, possible)
     scoresComplete = (f1(calculatedPrecisionComplete, calculatedRecallComplete), calculatedPrecisionComplete, calculatedRecallComplete)
     
-    calculatedPrecisionPartial = precision(correctPartial, actual)
-    calculatedRecallPartial = recall(correctPartial, possible)
+    calculatedPrecisionPartial = precision(correctPartialPrecision, actual)
+    calculatedRecallPartial = recall(correctPartialRecall, possible)
     scoresPartial = (f1(calculatedPrecisionPartial, calculatedRecallPartial), calculatedPrecisionPartial, calculatedRecallPartial)
     
     return scoresComplete, scoresPartial
@@ -170,25 +209,27 @@ def evaluate_document(y_true, y_pred, gold_coverage = 0.8, debug = False):
 
 
 def evaluate_dataset(zip_of_y_true_pred, gold_coverage = 0.8, debug = False):
-    correctComplete, correctPartial, possible, actual = 0, 0, 0, 0
+    correctCompletePrecision, correctPartialPrecision, correctCompleteRecall, correctPartialRecall, possible, actual = 0, 0, 0, 0, 0, 0
 
     for y_true, y_pred in zip_of_y_true_pred:
-        partialcorrectComplete, partialcorrectPartial, partialpossible, partialactual = get_counts_correct(y_true, y_pred, gold_coverage=gold_coverage, debug = debug)
-        correctComplete += partialcorrectComplete
-        correctPartial += partialcorrectPartial
-        possible += partialpossible
-        actual += partialactual
+        temPcorrectCompleteRecall, temPcorrectPartialRecall, temPcorrectCompletePrecision, temPcorrectPartialPrecision, temPpossible, temPactual = get_counts_correct(y_true, y_pred, gold_coverage=gold_coverage, debug = debug)
+
+        correctCompletePrecision += temPcorrectCompletePrecision
+        correctPartialPrecision += temPcorrectPartialPrecision
+        correctCompleteRecall += temPcorrectCompleteRecall
+        correctPartialRecall += temPcorrectPartialRecall
+        possible += temPpossible
+        actual += temPactual
         
 
 
-    calculatedPrecisionComplete = precision(correctComplete, actual)
-    calculatedRecallComplete = recall(correctComplete, possible)
+    calculatedPrecisionComplete = precision(correctCompletePrecision, actual)
+    calculatedRecallComplete = recall(correctCompleteRecall, possible)
     scoresComplete = (f1(calculatedPrecisionComplete, calculatedRecallComplete), calculatedPrecisionComplete, calculatedRecallComplete)
     
-    calculatedPrecisionPartial = precision(correctPartial, actual)
-    calculatedRecallPartial = recall(correctPartial, possible)
+    calculatedPrecisionPartial = precision(correctPartialPrecision, actual)
+    calculatedRecallPartial = recall(correctPartialRecall, possible)
     scoresPartial = (f1(calculatedPrecisionPartial, calculatedRecallPartial), calculatedPrecisionPartial, calculatedRecallPartial)
-
     return scoresComplete, scoresPartial
 
 
