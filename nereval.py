@@ -1,8 +1,9 @@
+#https://github.com/jantrienes/nereval
+#modified version off
+
 # pylint: disable=C0103
 from __future__ import division
-import argparse
-import collections
-import json
+import argparse, collections, json, pandas as pd
 
 Entity = collections.namedtuple('Entity', ['text', 'type', 'start'])
 
@@ -19,6 +20,19 @@ def has_overlap(x, y):
     end_y = y.start + len(y.text)
     return x.start < end_y and y.start < end_x
 
+def percentage_overlap_on_x(x,y):
+    end_x = x.start + len(x.text)
+    end_y = y.start + len(y.text)
+    a = x
+    x = set(range(x.start, end_x))
+    if len(x) == 0:
+        print(a)
+
+
+    y = set(range(y.start, end_y))
+    return len(x.intersection(y))/len(x)
+
+
 def correct_text(x, y):
     """
     Assert entity boundaries are correct regardless of entity type.
@@ -31,7 +45,7 @@ def correct_type(x, y):
     """
     return x.type == y.type and has_overlap(x, y)
 
-def count_correct(true, pred):
+def count_correct(true, pred, gold_coverage = 0.8, debug = False):
     """
     Computes the count of correctly predicted entities on two axes: type and text.
 
@@ -46,27 +60,34 @@ def count_correct(true, pred):
     -------
     count_text: int
         The number of entities predicted where the text matches exactly.
-    count_type: int
+    count_lower_coverage: int
         The number of entities where the type is correctly predicted and the text overlaps.
     """
-    count_text, count_type = 0, 0
+    count_text, count_lower_coverage = 0, 0
 
     for x in true:
         for y in pred:
             text_match = correct_text(x, y)
-            type_match = correct_type(x, y)
+            type_match = percentage_overlap_on_x(x, y) >= gold_coverage
 
             if text_match:
+                if debug == True:
+                    print("COMPLETE MATCH:\n\t", x.text, " - ", y.text, "\n\t", x.start,y.start)
                 count_text += 1
 
             if type_match:
-                count_type += 1
+                count_lower_coverage += 1
+                if not text_match and debug == True:
+                    print("PARTIAL MATCH:\n\t", x.text, " - ", y.text, "\n\t", f"{x.start} - {x.start + len(x.text)}", f"{y.start} - {y.start + len(y.text)}")
+
+
+
 
             if type_match or text_match:
                 # Stop as soon as an entity has been recognized by the system
                 break
-
-    return count_text, count_type
+    
+    return count_text, count_lower_coverage
 
 def precision(correct, actual):
     if actual == 0:
@@ -86,7 +107,21 @@ def f1(p, r):
 
     return 2 * (p * r) / (p + r)
 
-def evaluate(y_true, y_pred):
+def get_counts_correct(y_true, y_pred, gold_coverage = 0.8, debug = False):
+    
+    x, y = y_true, y_pred
+
+
+    count_text, count_lower_coverage = count_correct(x, y, gold_coverage=gold_coverage, debug = debug)
+    correctComplete = count_text
+    correctPartial  = count_lower_coverage
+    possible = len(x) 
+    actual = len(y) 
+
+    return correctComplete, correctPartial, possible, actual
+
+
+def evaluate_document(y_true, y_pred, gold_coverage = 0.8, debug = False):
     """
     Evaluate classification results for a whole dataset. Each row corresponds to one text in the
     dataset.
@@ -94,14 +129,14 @@ def evaluate(y_true, y_pred):
     Parameters
     ----------
     y_true: list of list
-        For each text in the dataset, a list of ground-truth entities.
+        a list of ground-truth entities.
     y_pred: list of list
-        For each text in the dataset, a list of predicted entities.
+        a list of predicted entities.
 
     Returns
     -------
     float:
-        Micro-averaged F1 score of precision and recall.
+        Micro-averaged F1 score of precision and recall, precision and recall.
 
     Example
     -------
@@ -115,34 +150,67 @@ def evaluate(y_true, y_pred):
     >>> evaluate(y_true, y_pred)
     0.6666666666666666
     """
-    if len(y_true) != len(y_pred):
-        raise ValueError('Bad input shape: y_true and y_pred should have the same length.')
+    if gold_coverage == 0:
+        print("COVERAGE CANT BE 0")
+        return None
 
-    correct, actual, possible = 0, 0, 0
+    correctComplete, correctPartial, possible, actual = get_counts_correct(y_true, y_pred, gold_coverage=gold_coverage, debug = debug)
 
-    for x, y in zip(y_true, y_pred):
-        correct += sum(count_correct(x, y))
-        # multiply by two to account for both type and text
-        possible += len(x) * 2
-        actual += len(y) * 2
-    calculatedPrecision = precision(correct, actual)
-    calculatedRecall = recall(correct, possible)
-    return f1(calculatedPrecision, calculatedRecall), calculatedPrecision, calculatedRecall
 
-def sign_test(truth, model_a, model_b):
-    better = 0
-    worse = 0
+    calculatedPrecisionComplete = precision(correctComplete, actual)
+    calculatedRecallComplete = recall(correctComplete, possible)
+    scoresComplete = (f1(calculatedPrecisionComplete, calculatedRecallComplete), calculatedPrecisionComplete, calculatedRecallComplete)
+    
+    calculatedPrecisionPartial = precision(correctPartial, actual)
+    calculatedRecallPartial = recall(correctPartial, possible)
+    scoresPartial = (f1(calculatedPrecisionPartial, calculatedRecallPartial), calculatedPrecisionPartial, calculatedRecallPartial)
+    
+    return scoresComplete, scoresPartial
 
-    for true, a, b in zip(truth, model_a, model_b):
-        score_a = evaluate([true], [a])
-        score_b = evaluate([true], [b])
 
-        if score_a - score_b > 0:
-            worse += 1
-        elif score_a - score_b < 0:
-            better += 1
 
-    return better, worse
+def evaluate_dataset(zip_of_y_true_pred, gold_coverage = 0.8, debug = False):
+    correctComplete, correctPartial, possible, actual = 0, 0, 0, 0
+
+    for y_true, y_pred in zip_of_y_true_pred:
+        partialcorrectComplete, partialcorrectPartial, partialpossible, partialactual = get_counts_correct(y_true, y_pred, gold_coverage=gold_coverage, debug = debug)
+        correctComplete += partialcorrectComplete
+        correctPartial += partialcorrectPartial
+        possible += partialpossible
+        actual += partialactual
+        
+
+
+    calculatedPrecisionComplete = precision(correctComplete, actual)
+    calculatedRecallComplete = recall(correctComplete, possible)
+    scoresComplete = (f1(calculatedPrecisionComplete, calculatedRecallComplete), calculatedPrecisionComplete, calculatedRecallComplete)
+    
+    calculatedPrecisionPartial = precision(correctPartial, actual)
+    calculatedRecallPartial = recall(correctPartial, possible)
+    scoresPartial = (f1(calculatedPrecisionPartial, calculatedRecallPartial), calculatedPrecisionPartial, calculatedRecallPartial)
+
+    return scoresComplete, scoresPartial
+
+
+def pretty_print_scores(scores):
+    pd.set_option("display.precision", 4)
+    columns = pd.MultiIndex.from_tuples(
+        [(libraryName, label, coverage) for libraryName in scores.keys() for label in scores[libraryName]   for coverage in ["Complete", "Partial"] ], 
+        names=["Method", "Coverage", "Entity Type"]
+        )
+
+    df = pd.DataFrame(index = ["F1", "Precision", "Recall"], columns=columns)
+
+    for libraryName in scores.keys():
+            for label in scores[libraryName]:
+                df.loc[:,(libraryName, label, "Complete")] = scores[libraryName][label][0]
+                df.loc[:,(libraryName, label, "Partial")] = scores[libraryName][label][1]
+
+
+
+    return df
+
+
 
 def _parse_json(file_name):
     data = None
@@ -157,22 +225,4 @@ def _parse_json(file_name):
 
     return data
 
-def evaluate_json(file_name):
-    """
-    Evaluate according to results in JSON file format.
-    """
-    y_true = []
-    y_pred = []
 
-    for instance in _parse_json(file_name):
-        y_true.append(instance['true'])
-        y_pred.append(instance['predicted'])
-
-    return evaluate(y_true, y_pred)
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Compute F1 score for predictions in JSON file.')
-    parser.add_argument('file_name', help='The JSON containing classification results')
-    args = parser.parse_args()
-
-    print('F1-score: %.2f' % evaluate_json(args.file_name))
